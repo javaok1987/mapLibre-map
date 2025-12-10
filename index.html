@@ -53,13 +53,13 @@
           onclick="resetView()"
           class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition text-sm font-medium"
         >
-          📍 重置視角 (台北101)
+          📍 台北101
         </button>
         <button
           onclick="resetToInitialView()"
           class="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition text-sm font-medium"
         >
-          🌏 回到初始視角
+          🌏 全台地圖
         </button>
       </div>
 
@@ -79,8 +79,8 @@
       // 使用 OpenFreeMap 的 Liberty 樣式（基於 OpenStreetMap 數據）
       // 這是一個免費開源的矢量圖塊樣式，支援 3D 建築物
       const styleUrl = "https://tiles.openfreemap.org/styles/liberty";
-      // const DATA_PATH = "./original"; // 原始資料.
-      const DATA_PATH = "./simplified"; // 壓縮資料.
+      const DATA_PATH = "./original"; // 原始資料.
+      // const DATA_PATH = "./simplified"; // 壓縮資料.
 
       // 1. 初始化地圖
       const map = new maplibregl.Map({
@@ -290,7 +290,10 @@
         // 點擊縣市顯示 Popup 並 zoom in，並載入行政區
         map.on("click", "cities-fill", async (e) => {
           // Check if districts are visible and click is on a district
-          if (districtState.isDistrictVisible) {
+          if (
+            districtState.isDistrictVisible &&
+            map.getLayer("district-fill")
+          ) {
             const districtFeatures = map.queryRenderedFeatures(e.point, {
               layers: ["district-fill"],
             });
