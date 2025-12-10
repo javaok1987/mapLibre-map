@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "description": "台灣縣市行政區 GeoJSON 索引檔",
+  "counties": {
+    "台北市": "taipei-city",
+    "新北市": "new-taipei-city",
+    "桃園縣": "taoyuan-county",
+    "台中市": "taichung-city",
+    "台南市": "tainan-city",
+    "高雄市": "kaohsiung-city",
+    "基隆市": "keelung-city",
+    "新竹市": "hsinchu-city",
+    "新竹縣": "hsinchu-county",
+    "苗栗縣": "miaoli-county",
+    "彰化縣": "changhua-county",
+    "南投縣": "nantou-county",
+    "雲林縣": "yunlin-county",
+    "嘉義市": "chiayi-city",
+    "嘉義縣": "chiayi-county",
+    "屏東縣": "pingtung-county",
+    "宜蘭縣": "yilan-county",
+    "花蓮縣": "hualien-county",
+    "台東縣": "taitung-county",
+    "澎湖縣": "penghu-county",
+    "金門縣": "kinmen-county",
+    "連江縣": "lienchiang-county"
+  },
+  "normalizeCountyName": "將臺替換為台",
+  "totalCounties": 22,
+  "generatedAt": "2025-12-10T03:39:21.886Z"
+}
