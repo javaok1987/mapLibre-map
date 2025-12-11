@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MapLibre GL JS 3D 地圖範例</title>
+
+    <!-- 引入 MapLibre GL JS 的 CSS -->
+    <link
+      href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+
+    <!-- 引入 Tailwind CSS 用於快速排版 UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+      }
+
+      /* 自定義 Popup 樣式 */
+      .maplibregl-popup-content {
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        font-family: "Noto Sans TC", sans-serif;
+      }
+      .maplibregl-popup-close-button {
+        font-size: 16px;
+        color: #666;
+        padding: 5px 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 地圖容器 -->
+    <div id="map"></div>
+
+    <!-- 浮動控制面板 (UI) -->
+    <div
+      class="absolute top-4 left-4 bg-white/90 backdrop-blur-sm p-4 rounded-lg shadow-lg max-w-xs z-10 border border-gray-200"
+    >
+      <div class="flex flex-col gap-2">
+        <button
+          onclick="resetView()"
+          class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition text-sm font-medium"
+        >
+          📍 台北101
+        </button>
+        <button
+          onclick="resetToInitialView()"
+          class="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition text-sm font-medium"
+        >
+          🌏 全台地圖
+        </button>
+      </div>
+
+      <div class="mt-4 text-xs text-gray-500">
+        <p>💡 操作提示：</p>
+        <ul class="list-disc pl-4 mt-1 space-y-1">
+          <li>按住 <b>右鍵</b> 拖曳可傾斜/旋轉</li>
+          <li>按住 <b>Ctrl + 左鍵</b> 亦可</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 引入 MapLibre GL JS 的 JavaScript -->
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+    <script>
+      // const DATA_PATH = "./original"; // 原始資料.
+      const DATA_PATH = "./simplified"; // 壓縮資料.
+
+      // 1. 初始化地圖（使用空白樣式，稍後加入柵格圖磚）
+      const map = new maplibregl.Map({
+        container: "map",
+        style: {
+          version: 8,
+          glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+          sources: {
+            "osm-tiles": {
+              type: "raster",
+              tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+              tileSize: 256,
+              attribution:
+                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            },
+          },
+          layers: [
+            {
+              id: "osm-tiles-layer",
+              type: "raster",
+              source: "osm-tiles",
+              minzoom: 0,
+              maxzoom: 19,
+            },
+          ],
+        },
+        center: [120.98760921351077, 23.668070137039763],
+        zoom: 7,
+        pitch: 0,
+        bearing: 0,
+        antialias: true,
+      });
+
+      // District state management
+      const districtState = {
+        isDistrictVisible: false,
+        currentCounty: null,
+        districtSourceId: "district-data",
+        countyIndexMap: null,
+      };
+
+      // 2. 加入導航控制項 (縮放、指北針)
+      map.addControl(
+        new maplibregl.NavigationControl({
+          visualizePitch: true, // 讓指北針顯示傾斜狀態
+        }),
+        "top-right"
+      );
+
+      // 3. 加入一個標記 (Marker)
+      // const popup = new maplibregl.Popup({ offset: 25 })
+      //     .setHTML('<h3 class="font-bold text-lg">台北 101</h3>');
+
+      // new maplibregl.Marker({ color: "#EF4444" })
+      //     .setLngLat([121.5645, 25.0336])
+      //     .setPopup(popup)
+      //     .addTo(map);
+
+      // 4. 當地圖樣式加載完成後，加入 3D 建築物圖層和縣市邊界
+      map.on("load", () => {
+        // 加入台灣縣市邊界 GeoJSON 數據源
+        // 使用 promoteId 將 COUNTYSN 屬性提升為 feature id
+        map.addSource("taiwan-cities", {
+          type: "geojson",
+          data: `${DATA_PATH}/twCounty2010.geo.json`,
+          // data: "https://dev-leju-storage-public.s3.ap-northeast-2.amazonaws.com/frontend/twgeojson/town-geojson/twCounty2010.geo.json",
+          promoteId: "COUNTYSN",
+        });
+
+        // 為了讓建築物文字顯示在建築物上方，我們需要找到圖層順序中的文字層
+        const layers = map.getStyle().layers;
+        let labelLayerId;
+        for (let i = 0; i < layers.length; i++) {
+          if (layers[i].type === "symbol" && layers[i].layout["text-field"]) {
+            labelLayerId = layers[i].id;
+            break;
+          }
+        }
+
+        // 加入 3D 建築物圖層
+        // 這是將平面的向量圖磚依照 'render_height' 或 'height' 屬性拉高
+        map.addLayer(
+          {
+            id: "3d-buildings",
+            source: "openmaptiles", // 注意：需對應 style.json 裡的 source 名稱
+            "source-layer": "building",
+            filter: ["==", "extrude", "true"], // 只篩選有擠壓屬性的建築
+            type: "fill-extrusion",
+            minzoom: 15, // 拉近到這個層級才顯示 3D
+            paint: {
+              // 建築物顏色
+              "fill-extrusion-color": "#aaa",
+
+              // ★ 關鍵：從資料屬性中讀取高度
+              "fill-extrusion-height": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "render_height"], // 或是 'height'，視圖資來源而定
+              ],
+
+              // 建築物底座高度（如果是蓋在空中的建築）
+              "fill-extrusion-base": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "render_min_height"],
+              ],
+
+              // 透明度
+              "fill-extrusion-opacity": 0.8,
+            },
+          },
+          labelLayerId // 將此圖層插入到文字標籤圖層的下方
+        );
+
+        // 加入縣市邊界填充圖層
+        map.addLayer({
+          id: "cities-fill",
+          type: "fill",
+          source: "taiwan-cities",
+          maxzoom: 14,
+          paint: {
+            "fill-color": "#088",
+            "fill-opacity": [
+              "case",
+              ["boolean", ["feature-state", "hover"], false],
+              0.3,
+              0.1,
+            ],
+          },
+        });
+
+        // 加入縣市邊界線條圖層
+        map.addLayer({
+          id: "cities-outline",
+          type: "line",
+          source: "taiwan-cities",
+          maxzoom: 14,
+          paint: {
+            "line-color": "#088",
+            "line-width": 2,
+            "line-opacity": 0.8,
+          },
+        });
+
+        // 加入縣市名稱標籤圖層
+        map.addLayer({
+          id: "cities-labels",
+          type: "symbol",
+          source: "taiwan-cities",
+          maxzoom: 14,
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 14,
+            "text-offset": [0, 0],
+            "text-anchor": "center",
+          },
+          paint: {
+            "text-color": "#088",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 2,
+          },
+        });
+
+        // Load county-to-filename index for districts
+        async function loadCountyIndex() {
+          const response = await fetch(`${DATA_PATH}/index.json`);
+          const data = await response.json();
+          districtState.countyIndexMap = data.counties;
+        }
+
+        // Initialize district system
+        loadCountyIndex().catch((err) =>
+          console.error("Failed to load county index:", err)
+        );
+
+        // 加入縣市邊界的 hover 互動效果
+        let hoveredCityId = null;
+
+        map.on("mousemove", "cities-fill", (e) => {
+          if (e.features.length > 0) {
+            const featureId = e.features[0].id;
+
+            // 只有當 feature 有 id 時才使用 setFeatureState
+            if (featureId !== undefined) {
+              if (hoveredCityId !== null) {
+                map.setFeatureState(
+                  { source: "taiwan-cities", id: hoveredCityId },
+                  { hover: false }
+                );
+              }
+              hoveredCityId = featureId;
+              map.setFeatureState(
+                { source: "taiwan-cities", id: hoveredCityId },
+                { hover: true }
+              );
+            }
+          }
+        });
+
+        map.on("mouseleave", "cities-fill", () => {
+          if (hoveredCityId !== null) {
+            map.setFeatureState(
+              { source: "taiwan-cities", id: hoveredCityId },
+              { hover: false }
+            );
+          }
+          hoveredCityId = null;
+        });
+
+        // 改變鼠標指針樣式
+        map.on("mouseenter", "cities-fill", () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+
+        map.on("mouseleave", "cities-fill", () => {
+          map.getCanvas().style.cursor = "";
+        });
+
+        // 點擊縣市顯示 Popup 並 zoom in，並載入行政區
+        map.on("click", "cities-fill", async (e) => {
+          // Check if districts are visible and click is on a district
+          if (
+            districtState.isDistrictVisible &&
+            map.getLayer("district-fill")
+          ) {
+            const districtFeatures = map.queryRenderedFeatures(e.point, {
+              layers: ["district-fill"],
+            });
+            if (districtFeatures.length > 0) {
+              // Click is on a district, don't show county popup
+              return;
+            }
+          }
+
+          if (e.features.length > 0) {
+            const feature = e.features[0];
+            const cityName = feature.properties.name;
+            const countyCode = feature.properties.COUNTYSN;
+
+            // 計算 feature 的邊界
+            const coordinates = feature.geometry.coordinates;
+            const bounds = new maplibregl.LngLatBounds();
+
+            // 根據 geometry 類型處理座標
+            const processCoordinates = (coords) => {
+              if (typeof coords[0] === "number") {
+                // 單個座標點 [lng, lat]
+                bounds.extend(coords);
+              } else {
+                // 遞迴處理巢狀陣列
+                coords.forEach((coord) => processCoordinates(coord));
+              }
+            };
+
+            processCoordinates(coordinates);
+
+            // Zoom in 到該縣市的邊界，加入 padding 讓視覺更舒適
+            map.fitBounds(bounds, {
+              padding: { top: 50, bottom: 50, left: 50, right: 50 },
+              duration: 1000, // 動畫持續時間
+              pitch: 45, // 加入一點傾斜效果
+            });
+
+            // Load and display districts
+            try {
+              const districtData = await loadDistrictData(cityName);
+              showDistricts(districtData);
+              districtState.isDistrictVisible = true;
+              districtState.currentCounty = cityName;
+            } catch (error) {
+              console.error("Failed to load districts:", error);
+              new maplibregl.Popup()
+                .setLngLat(e.lngLat)
+                .setHTML(
+                  `
+                                <div class="text-red-600">
+                                    <p class="font-bold text-sm">⚠️ 錯誤</p>
+                                    <p class="text-xs mt-1">無法載入行政區資料</p>
+                                </div>
+                            `
+                )
+                .addTo(map);
+            }
+          }
+        });
+
+        // District hover effects
+        let hoveredDistrictId = null;
+
+        map.on("mousemove", "district-fill", (e) => {
+          if (e.features.length > 0) {
+            const featureId = e.features[0].id;
+            if (featureId !== undefined) {
+              if (hoveredDistrictId !== null) {
+                map.setFeatureState(
+                  { source: "district-data", id: hoveredDistrictId },
+                  { hover: false }
+                );
+              }
+              hoveredDistrictId = featureId;
+              map.setFeatureState(
+                { source: "district-data", id: hoveredDistrictId },
+                { hover: true }
+              );
+            }
+          }
+        });
+
+        map.on("mouseleave", "district-fill", () => {
+          if (hoveredDistrictId !== null) {
+            map.setFeatureState(
+              { source: "district-data", id: hoveredDistrictId },
+              { hover: false }
+            );
+          }
+          hoveredDistrictId = null;
+        });
+
+        map.on("mouseenter", "district-fill", () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+
+        map.on("mouseleave", "district-fill", () => {
+          map.getCanvas().style.cursor = "";
+        });
+
+        // District click handler
+        map.on("click", "district-fill", (e) => {
+          if (e.features.length > 0) {
+            const feature = e.features[0];
+            const districtName = feature.properties.TOWNNAME;
+
+            // Calculate bounds and zoom
+            const bounds = calculateBounds(feature.geometry.coordinates);
+            map.fitBounds(bounds, {
+              padding: 80,
+              duration: 800,
+              pitch: 30,
+              maxZoom: 14,
+            });
+
+            // Show popup
+            new maplibregl.Popup()
+              .setLngLat(e.lngLat)
+              .setHTML(`<h3 class="font-bold text-base">${districtName}</h3>`)
+              .addTo(map);
+          }
+        });
+
+        // Background click handler - remove districts when clicking outside
+        map.on("click", (e) => {
+          const features = map.queryRenderedFeatures(e.point, {
+            layers: ["district-fill", "cities-fill"],
+          });
+
+          // If no features clicked and districts are visible, remove them
+          if (features.length === 0 && districtState.isDistrictVisible) {
+            removeDistricts();
+            resetToTaiwanView();
+          }
+        });
+      });
+
+      // --- 以下是功能函式 ---
+
+      // 功能：重置視角 (台北101近景)
+      function resetView() {
+        map.flyTo({
+          center: [121.5645, 25.0336],
+          zoom: 16.5,
+          pitch: 60,
+          bearing: -20,
+          essential: true, // 確保動畫優先執行
+        });
+      }
+
+      // 功能：回到初始預設視角
+      function resetToInitialView() {
+        removeDistricts(); // Remove districts if visible
+        map.flyTo({
+          center: [120.98760921351077, 23.668070137039763],
+          zoom: 7,
+          pitch: 0,
+          bearing: 0,
+          essential: true,
+        });
+      }
+
+      // 功能：自動旋轉動畫
+      let isRotating = false;
+      function rotateCamera(timestamp) {
+        if (!isRotating) {
+          // 開始旋轉
+          isRotating = true;
+          function frame() {
+            if (!isRotating) return;
+            // 每次移動 0.2 度
+            map.rotateTo((map.getBearing() + 0.2) % 360, { duration: 0 });
+            requestAnimationFrame(frame);
+          }
+          frame();
+        } else {
+          // 停止旋轉
+          isRotating = false;
+          // 停止時的緩衝
+          map.stop();
+        }
+      }
+
+      // --- District Management Functions ---
+
+      // Calculate bounds from geometry coordinates
+      function calculateBounds(coordinates) {
+        const bounds = new maplibregl.LngLatBounds();
+
+        const processCoordinates = (coords) => {
+          if (typeof coords[0] === "number") {
+            bounds.extend(coords);
+          } else {
+            coords.forEach((coord) => processCoordinates(coord));
+          }
+        };
+
+        processCoordinates(coordinates);
+        return bounds;
+      }
+
+      // Load district GeoJSON data
+      async function loadDistrictData(countyName) {
+        // Normalize county name (臺 → 台)
+        const normalizedName = countyName.replace(/臺/g, "台");
+
+        // Look up filename from index
+        const filename = districtState.countyIndexMap[normalizedName];
+        if (!filename) {
+          throw new Error(`No district data found for ${countyName}`);
+        }
+
+        // Fetch GeoJSON
+        const response = await fetch(`${DATA_PATH}/${filename}.geo.json`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return await response.json();
+      }
+
+      // Add district layers to map
+      function addDistrictLayers() {
+        const beforeLayerId = "cities-labels";
+
+        // Fill layer
+        map.addLayer(
+          {
+            id: "district-fill",
+            type: "fill",
+            source: "district-data",
+            maxzoom: 14,
+            layout: { visibility: "none" },
+            paint: {
+              "fill-color": "#0066CC",
+              "fill-opacity": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                0.35,
+                0.15,
+              ],
+            },
+          },
+          beforeLayerId
+        );
+
+        // Outline layer
+        map.addLayer(
+          {
+            id: "district-outline",
+            type: "line",
+            source: "district-data",
+            maxzoom: 14,
+            layout: { visibility: "none" },
+            paint: {
+              "line-color": "#0066CC",
+              "line-width": 1.5,
+              "line-opacity": 0.9,
+            },
+          },
+          beforeLayerId
+        );
+
+        // Label layer
+        map.addLayer(
+          {
+            id: "district-labels",
+            type: "symbol",
+            source: "district-data",
+            minzoom: 10,
+            maxzoom: 14,
+            layout: {
+              visibility: "none",
+              "text-field": ["get", "TOWNNAME"],
+              "text-font": ["Noto Sans Regular"],
+              "text-size": 12,
+              "text-anchor": "center",
+            },
+            paint: {
+              "text-color": "#0066CC",
+              "text-halo-color": "#ffffff",
+              "text-halo-width": 2,
+            },
+          },
+          beforeLayerId
+        );
+      }
+
+      // Show district layers
+      function showDistricts(geojsonData) {
+        // Add or update source
+        if (!map.getSource("district-data")) {
+          map.addSource("district-data", {
+            type: "geojson",
+            data: geojsonData,
+            promoteId: "TOWNSN",
+          });
+        } else {
+          map.getSource("district-data").setData(geojsonData);
+        }
+
+        // Add layers if they don't exist
+        if (!map.getLayer("district-fill")) {
+          addDistrictLayers();
+        }
+
+        // Show layers
+        map.setLayoutProperty("district-fill", "visibility", "visible");
+        map.setLayoutProperty("district-outline", "visibility", "visible");
+        map.setLayoutProperty("district-labels", "visibility", "visible");
+      }
+
+      // Hide district layers
+      function removeDistricts() {
+        if (map.getLayer("district-fill")) {
+          map.setLayoutProperty("district-fill", "visibility", "none");
+          map.setLayoutProperty("district-outline", "visibility", "none");
+          map.setLayoutProperty("district-labels", "visibility", "none");
+        }
+
+        districtState.isDistrictVisible = false;
+        districtState.currentCounty = null;
+      }
+
+      // Reset to full Taiwan view
+      function resetToTaiwanView() {
+        map.flyTo({
+          center: [120.98760921351077, 23.668070137039763],
+          zoom: 7,
+          pitch: 0,
+          bearing: 0,
+          duration: 1200,
+          essential: true,
+        });
+      }
+    </script>
+  </body>
+</html>
